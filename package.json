@@ -2,9 +2,10 @@
   "name": "powerful-ai",
   "version": "1.0.0",
   "description": "A comprehensive, powerful AI engine with neural networks, NLP, machine learning, and autonomous agents",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node example.js",
+    "start": "node server.js",
+    "example": "node example.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
