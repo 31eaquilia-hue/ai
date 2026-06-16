@@ -1,14 +1,26 @@
 /**
- * PowerfulAI Web Server
- * Provides REST API and Web Interface
+ * PowerfulAI - Claude-like Chat Interface with Code Generation
+ * Features: Chat management, code generation, persistent storage
  */
 
 const http = require('http');
 const url = require('url');
+const fs = require('fs');
+const path = require('path');
 const PowerfulAI = require('./index');
 
+const PORT = 3000;
+const DATA_DIR = path.join(__dirname, 'data');
+const CHATS_DIR = path.join(DATA_DIR, 'chats');
+const MODELS_DIR = path.join(DATA_DIR, 'models');
+
+// Ensure directories exist
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+if (!fs.existsSync(CHATS_DIR)) fs.mkdirSync(CHATS_DIR);
+if (!fs.existsSync(MODELS_DIR)) fs.mkdirSync(MODELS_DIR);
+
 // Initialize AI
-const ai = new PowerfulAI({
+let ai = new PowerfulAI({
   modelSize: 'large',
   learningRate: 0.01,
   maxIterations: 100,
@@ -17,7 +29,100 @@ const ai = new PowerfulAI({
   enableAgents: true
 });
 
-const PORT = 3000;
+// Load persisted model data
+function loadModelData() {
+  const modelFile = path.join(MODELS_DIR, 'model.json');
+  if (fs.existsSync(modelFile)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(modelFile, 'utf-8'));
+      console.log('✅ Model data loaded from disk');
+      return data;
+    } catch (error) {
+      console.log('⚠️  Could not load model data:', error.message);
+    }
+  }
+  return null;
+}
+
+// Save model data
+function saveModelData(data) {
+  const modelFile = path.join(MODELS_DIR, 'model.json');
+  try {
+    fs.writeFileSync(modelFile, JSON.stringify(data, null, 2));
+    console.log('💾 Model data saved to disk');
+  } catch (error) {
+    console.log('⚠️  Could not save model data:', error.message);
+  }
+}
+
+// Load chat from disk
+function loadChat(chatId) {
+  const chatFile = path.join(CHATS_DIR, `${chatId}.json`);
+  if (fs.existsSync(chatFile)) {
+    return JSON.parse(fs.readFileSync(chatFile, 'utf-8'));
+  }
+  return null;
+}
+
+// Save chat to disk
+function saveChat(chatId, chat) {
+  const chatFile = path.join(CHATS_DIR, `${chatId}.json`);
+  fs.writeFileSync(chatFile, JSON.stringify(chat, null, 2));
+}
+
+// Get all chats
+function getAllChats() {
+  const chats = [];
+  if (fs.existsSync(CHATS_DIR)) {
+    const files = fs.readdirSync(CHATS_DIR);
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const chatId = file.replace('.json', '');
+        const chat = loadChat(chatId);
+        chats.push({
+          id: chatId,
+          title: chat.title,
+          created: chat.created,
+          updated: chat.updated,
+          messageCount: chat.messages.length
+        });
+      }
+    }
+  }
+  return chats.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+}
+
+// Generate code from AI response
+async function generateCode(prompt, context) {
+  try {
+    // Use NLP to understand the request
+    const analysis = await ai.think(prompt);
+    
+    // Generate code based on the intent
+    let code = '';
+    
+    if (prompt.toLowerCase().includes('function')) {
+      code = `// Generated Function\nfunction ${extractName(prompt) || 'myFunction'}(params) {\n  // TODO: Implement logic\n  return result;\n}\n\nmodule.exports = ${extractName(prompt) || 'myFunction'};`;
+    } else if (prompt.toLowerCase().includes('class')) {
+      code = `// Generated Class\nclass ${extractName(prompt) || 'MyClass'} {\n  constructor() {\n    // Initialize\n  }\n  \n  method() {\n    // TODO: Implement\n  }\n}\n\nmodule.exports = ${extractName(prompt) || 'MyClass'};`;
+    } else if (prompt.toLowerCase().includes('react') || prompt.toLowerCase().includes('component')) {
+      code = `import React, { useState } from 'react';\n\nconst ${extractName(prompt) || 'Component'} = () => {\n  const [state, setState] = useState(null);\n  \n  return (\n    <div>\n      {/* TODO: Add JSX */}\n    </div>\n  );\n};\n\nexport default ${extractName(prompt) || 'Component'};`;
+    } else if (prompt.toLowerCase().includes('api') || prompt.toLowerCase().includes('fetch')) {
+      code = `// API Call\nasync function fetchData() {\n  try {\n    const response = await fetch('/api/endpoint');\n    const data = await response.json();\n    return data;\n  } catch (error) {\n    console.error('Error fetching data:', error);\n    throw error;\n  }\n}`;
+    } else {
+      code = `// Generated Code\n// ${prompt}\n\n// TODO: Implement your code here`;
+    }
+    
+    return code;
+  } catch (error) {
+    return `// Error generating code: ${error.message}`;
+  }
+}
+
+function extractName(text) {
+  const match = text.match(/(?:function|class|const|component)\s+(\w+)/i);
+  return match ? match[1] : null;
+}
 
 // HTML Dashboard
 const htmlDashboard = `
@@ -26,7 +131,7 @@ const htmlDashboard = `
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🤖 PowerfulAI Dashboard</title>
+    <title>PowerfulAI - Claude-like Chat</title>
     <style>
         * {
             margin: 0;
@@ -35,409 +140,623 @@ const htmlDashboard = `
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: #fff;
+            height: 100vh;
+            overflow: hidden;
         }
         
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
+            display: flex;
+            height: 100vh;
         }
         
-        header {
-            text-align: center;
-            color: white;
-            margin-bottom: 40px;
+        .sidebar {
+            width: 260px;
+            background: #f7f7f8;
+            border-right: 1px solid #d1d5db;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
         }
         
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid #d1d5db;
         }
         
-        .subtitle {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
-        
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        
-        .card {
-            background: white;
-            border-radius: 10px;
-            padding: 25px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            transition: transform 0.3s, box-shadow 0.3s;
-        }
-        
-        .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
-        }
-        
-        .card h2 {
-            color: #667eea;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 5px;
-            color: #333;
-            font-weight: 500;
-        }
-        
-        input, textarea {
+        .new-chat-btn {
             width: 100%;
-            padding: 10px;
-            border: 2px solid #eee;
-            border-radius: 5px;
-            font-size: 1em;
-            transition: border-color 0.3s;
-        }
-        
-        input:focus, textarea:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
-        button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 10px 16px;
+            background: #10a37f;
             color: white;
-            padding: 12px 30px;
             border: none;
-            border-radius: 5px;
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 1em;
             font-weight: 600;
-            transition: transform 0.2s;
+            transition: background 0.2s;
         }
         
-        button:hover {
-            transform: scale(1.05);
+        .new-chat-btn:hover {
+            background: #0d9269;
         }
         
-        button:active {
-            transform: scale(0.98);
+        .chat-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
         }
         
-        .result {
-            background: #f8f9fa;
-            border-left: 4px solid #667eea;
-            padding: 15px;
-            margin-top: 15px;
-            border-radius: 5px;
-            display: none;
+        .chat-item {
+            padding: 12px 16px;
+            margin: 4px 0;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: left;
+            transition: background 0.2s;
+            word-break: break-word;
+            font-size: 0.95em;
+            color: #666;
         }
         
-        .result.show {
-            display: block;
+        .chat-item:hover {
+            background: #e5e5e5;
         }
         
-        .result pre {
-            overflow-x: auto;
+        .chat-item.active {
+            background: #10a37f;
+            color: white;
+        }
+        
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #fff;
+        }
+        
+        .chat-header {
+            padding: 16px;
+            border-bottom: 1px solid #d1d5db;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .chat-header h1 {
+            font-size: 1.2em;
             color: #333;
+        }
+        
+        .header-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .header-btn {
+            padding: 8px 16px;
+            background: #f0f0f0;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            cursor: pointer;
             font-size: 0.9em;
-            white-space: pre-wrap;
+            transition: background 0.2s;
+        }
+        
+        .header-btn:hover {
+            background: #e0e0e0;
+        }
+        
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        .message {
+            display: flex;
+            gap: 12px;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .message.user {
+            justify-content: flex-end;
+        }
+        
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
             word-wrap: break-word;
         }
         
-        .stats {
-            background: rgba(255,255,255,0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 10px;
-            padding: 20px;
+        .message.assistant .message-content {
+            background: #f0f0f0;
+            color: #333;
+        }
+        
+        .message.user .message-content {
+            background: #10a37f;
             color: white;
-            margin-bottom: 30px;
         }
         
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
+        .code-block {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 8px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
         }
         
-        .stat-item {
-            background: rgba(255,255,255,0.1);
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
         }
         
-        .stat-value {
-            font-size: 1.8em;
-            font-weight: bold;
-            margin-bottom: 5px;
+        .copy-btn {
+            padding: 4px 8px;
+            background: #10a37f;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8em;
         }
         
-        .stat-label {
-            font-size: 0.9em;
-            opacity: 0.9;
+        .copy-btn:hover {
+            background: #0d9269;
+        }
+        
+        .input-area {
+            padding: 16px;
+            border-top: 1px solid #d1d5db;
+            background: #fff;
+        }
+        
+        .input-wrapper {
+            display: flex;
+            gap: 8px;
+        }
+        
+        #messageInput {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 1em;
+            font-family: inherit;
+            resize: none;
+            max-height: 100px;
+        }
+        
+        #messageInput:focus {
+            outline: none;
+            border-color: #10a37f;
+            box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.1);
+        }
+        
+        .send-btn {
+            padding: 12px 16px;
+            background: #10a37f;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        
+        .send-btn:hover {
+            background: #0d9269;
+        }
+        
+        .send-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
         }
         
         .loading {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            background: #10a37f;
+            border-radius: 50%;
+            animation: blink 1s infinite;
+        }
+        
+        .loading:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .loading:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+        
+        .training-modal {
             display: none;
-            text-align: center;
-            color: #667eea;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .training-modal.show {
+            display: flex;
+        }
+        
+        .training-content {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .training-content h2 {
+            margin-bottom: 16px;
+            color: #333;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-group textarea, .form-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-family: inherit;
+        }
+        
+        .modal-buttons {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        
+        .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
             font-weight: 600;
         }
         
-        .loading.show {
-            display: block;
+        .modal-btn.primary {
+            background: #10a37f;
+            color: white;
         }
         
-        .error {
-            background: #fee;
-            border-left-color: #f44;
-            color: #c00;
-        }
-        
-        .success {
-            background: #efe;
-            border-left-color: #4f4;
-            color: #040;
+        .modal-btn.secondary {
+            background: #f0f0f0;
+            color: #333;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>🤖 PowerfulAI Dashboard</h1>
-            <p class="subtitle">Advanced AI Engine with NLP, ML & Autonomous Agents</p>
-        </header>
-        
-        <div class="stats">
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-value" id="neuronsCount">400+</div>
-                    <div class="stat-label">Neural Neurons</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="layersCount">3</div>
-                    <div class="stat-label">Network Layers</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="agentsCount">0</div>
-                    <div class="stat-label">Active Agents</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="memoryCount">0</div>
-                    <div class="stat-label">Memory Items</div>
-                </div>
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" onclick="createNewChat()">+ New Chat</button>
+            </div>
+            <div class="chat-list" id="chatList"></div>
+            <div style="padding: 12px; border-top: 1px solid #d1d5db;">
+                <button class="header-btn" style="width: 100%; background: #f0f0f0;" onclick="openTrainingModal()">🎓 Train AI</button>
             </div>
         </div>
         
-        <div class="grid">
-            <!-- NLP Section -->
-            <div class="card">
-                <h2>📝 Natural Language Processing</h2>
-                <div class="form-group">
-                    <label for="nlpInput">Enter text to analyze:</label>
-                    <textarea id="nlpInput" placeholder="Type something..." rows="4"></textarea>
+        <!-- Main Chat Area -->
+        <div class="main">
+            <div class="chat-header">
+                <h1 id="chatTitle">PowerfulAI</h1>
+                <div class="header-buttons">
+                    <button class="header-btn" onclick="downloadChat()">⬇️ Download</button>
+                    <button class="header-btn" onclick="deleteChat()">🗑️ Delete</button>
                 </div>
-                <button onclick="processNLP()">Analyze</button>
-                <div class="loading" id="nlpLoading">Processing...</div>
-                <div class="result" id="nlpResult"></div>
             </div>
             
-            <!-- ML Section -->
-            <div class="card">
-                <h2>🧠 Machine Learning</h2>
-                <div class="form-group">
-                    <label for="mlInput">Input data (comma separated):</label>
-                    <input type="text" id="mlInput" placeholder="e.g., 1,2,3,4,5">
-                </div>
-                <button onclick="makePrediction()">Predict</button>
-                <div class="loading" id="mlLoading">Processing...</div>
-                <div class="result" id="mlResult"></div>
-            </div>
+            <div class="messages" id="messages"></div>
             
-            <!-- Agent Section -->
-            <div class="card">
-                <h2>👥 Autonomous Agents</h2>
-                <div class="form-group">
-                    <label for="agentName">Agent Name:</label>
-                    <input type="text" id="agentName" placeholder="e.g., DataAnalyzer">
+            <div class="input-area">
+                <div class="input-wrapper">
+                    <textarea id="messageInput" placeholder="Ask me anything... (Shift+Enter to send)" rows="1"></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
                 </div>
-                <div class="form-group">
-                    <label for="agentGoal">Goal:</label>
-                    <input type="text" id="agentGoal" placeholder="e.g., Analyze data">
-                </div>
-                <button onclick="createAgent()">Create Agent</button>
-                <div class="loading" id="agentLoading">Processing...</div>
-                <div class="result" id="agentResult"></div>
             </div>
-            
-            <!-- Model Info Section -->
-            <div class="card">
-                <h2>ℹ️ Model Information</h2>
-                <button onclick="getModelInfo()">Get Model Info</button>
-                <div class="loading" id="infoLoading">Loading...</div>
-                <div class="result" id="infoResult"></div>
+        </div>
+    </div>
+    
+    <!-- Training Modal -->
+    <div class="training-modal" id="trainingModal">
+        <div class="training-content">
+            <h2>🎓 Train the AI</h2>
+            <div class="form-group">
+                <label>Training Data (one example per line, format: input,label)</label>
+                <textarea id="trainingData" placeholder="1,2,3,4,5,0&#10;2,3,4,5,6,0&#10;8,9,10,11,12,1" rows="6"></textarea>
+            </div>
+            <div class="form-group">
+                <label>Model Name:</label>
+                <input type="text" id="modelName" placeholder="my_model" value="default">
+            </div>
+            <div class="modal-buttons">
+                <button class="modal-btn secondary" onclick="closeTrainingModal()">Cancel</button>
+                <button class="modal-btn primary" onclick="trainModel()">Train Model</button>
             </div>
         </div>
     </div>
     
     <script>
-        async function processNLP() {
-            const input = document.getElementById('nlpInput').value;
-            if (!input.trim()) {
-                alert('Please enter some text');
-                return;
-            }
+        let currentChatId = null;
+        let chats = {};
+        
+        // Initialize
+        async function init() {
+            await loadAllChats();
+            createNewChat();
+        }
+        
+        // Load all chats
+        async function loadAllChats() {
+            const response = await fetch('/api/chats');
+            const data = await response.json();
+            chats = data;
+            renderChatList();
+        }
+        
+        // Render chat list
+        function renderChatList() {
+            const list = document.getElementById('chatList');
+            list.innerHTML = '';
             
-            document.getElementById('nlpLoading').classList.add('show');
-            document.getElementById('nlpResult').classList.remove('show');
-            
-            try {
-                const response = await fetch('/api/nlp', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: input })
+            Object.keys(chats).forEach(chatId => {
+                const chat = chats[chatId];
+                const div = document.createElement('button');
+                div.className = 'chat-item' + (chatId === currentChatId ? ' active' : '');
+                div.textContent = chat.title;
+                div.onclick = () => selectChat(chatId);
+                list.appendChild(div);
+            });
+        }
+        
+        // Create new chat
+        function createNewChat() {
+            fetch('/api/chat', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    chats[data.id] = data;
+                    selectChat(data.id);
+                    renderChatList();
                 });
-                const data = await response.json();
+        }
+        
+        // Select chat
+        function selectChat(chatId) {
+            currentChatId = chatId;
+            document.getElementById('chatTitle').textContent = chats[chatId].title;
+            renderMessages();
+            renderChatList();
+        }
+        
+        // Render messages
+        function renderMessages() {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = '';
+            
+            const messages = chats[currentChatId].messages || [];
+            messages.forEach(msg => {
+                const div = document.createElement('div');
+                div.className = 'message ' + msg.role;
                 
-                const resultDiv = document.getElementById('nlpResult');
-                if (data.error) {
-                    resultDiv.innerHTML = '<pre>' + data.error + '</pre>';
-                    resultDiv.classList.add('error');
+                const content = document.createElement('div');
+                content.className = 'message-content';
+                
+                if (msg.code) {
+                    const codeBlock = document.createElement('div');
+                    codeBlock.className = 'code-block';
+                    
+                    const header = document.createElement('div');
+                    header.className = 'code-header';
+                    header.innerHTML = '<span>Code</span><button class="copy-btn" onclick="copyCode(this)">Copy</button>';
+                    
+                    const pre = document.createElement('pre');
+                    pre.textContent = msg.code;
+                    
+                    codeBlock.appendChild(header);
+                    codeBlock.appendChild(pre);
+                    content.appendChild(codeBlock);
+                    
+                    const text = document.createElement('div');
+                    text.textContent = msg.content;
+                    content.appendChild(text);
                 } else {
-                    resultDiv.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
-                    resultDiv.classList.remove('error');
-                    resultDiv.classList.add('success');
+                    content.textContent = msg.content;
                 }
-                resultDiv.classList.add('show');
+                
+                div.appendChild(content);
+                messagesDiv.appendChild(div);
+            });
+            
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            input.value = '';
+            document.getElementById('sendBtn').disabled = true;
+            
+            // Add user message
+            const userMsg = { role: 'user', content: message };
+            chats[currentChatId].messages.push(userMsg);
+            renderMessages();
+            
+            try {
+                // Send to AI
+                const response = await fetch('/api/message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chatId: currentChatId,
+                        message: message
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Add AI response
+                chats[currentChatId].messages.push({
+                    role: 'assistant',
+                    content: data.response,
+                    code: data.code || null
+                });
+                
+                // Update chat title if first message
+                if (chats[currentChatId].messages.length === 2) {
+                    chats[currentChatId].title = message.substring(0, 30) + (message.length > 30 ? '...' : '');
+                }
+                
+                renderMessages();
+                renderChatList();
             } catch (error) {
                 console.error('Error:', error);
-            } finally {
-                document.getElementById('nlpLoading').classList.remove('show');
+            }
+            
+            document.getElementById('sendBtn').disabled = false;
+        }
+        
+        // Copy code
+        function copyCode(btn) {
+            const code = btn.closest('.code-block').querySelector('pre').textContent;
+            navigator.clipboard.writeText(code);
+            btn.textContent = '✓ Copied';
+            setTimeout(() => btn.textContent = 'Copy', 2000);
+        }
+        
+        // Download chat
+        function downloadChat() {
+            if (!currentChatId) return;
+            const chat = chats[currentChatId];
+            const data = JSON.stringify(chat, null, 2);
+            const blob = new Blob([data], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = \`chat-\${chat.title.replace(/\\s+/g, '-')}-\${new Date().toISOString().split('T')[0]}.json\`;
+            a.click();
+        }
+        
+        // Delete chat
+        function deleteChat() {
+            if (!currentChatId || confirm('Delete this chat?')) {
+                fetch(\`/api/chat/\${currentChatId}\`, { method: 'DELETE' })
+                    .then(() => {
+                        delete chats[currentChatId];
+                        createNewChat();
+                        renderChatList();
+                    });
             }
         }
         
-        async function makePrediction() {
-            const input = document.getElementById('mlInput').value;
-            if (!input.trim()) {
-                alert('Please enter data');
+        // Training modal
+        function openTrainingModal() {
+            document.getElementById('trainingModal').classList.add('show');
+        }
+        
+        function closeTrainingModal() {
+            document.getElementById('trainingModal').classList.remove('show');
+        }
+        
+        async function trainModel() {
+            const data = document.getElementById('trainingData').value;
+            const modelName = document.getElementById('modelName').value;
+            
+            if (!data) {
+                alert('Please enter training data');
                 return;
             }
             
-            document.getElementById('mlLoading').classList.add('show');
-            document.getElementById('mlResult').classList.remove('show');
+            const lines = data.split('\\n').filter(l => l.trim());
+            const trainingData = lines.map(line => {
+                const parts = line.split(',').map(p => parseFloat(p.trim()));
+                return parts;
+            });
             
             try {
-                const data = input.split(',').map(x => parseFloat(x.trim()));
-                if (data.length !== 5 || data.some(isNaN)) {
-                    throw new Error('Please enter exactly 5 numbers separated by commas');
-                }
-                
-                const response = await fetch('/api/predict', {
+                const response = await fetch('/api/train', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ data: data })
+                    body: JSON.stringify({
+                        modelName: modelName,
+                        data: trainingData
+                    })
                 });
+                
                 const result = await response.json();
-                
-                const resultDiv = document.getElementById('mlResult');
-                resultDiv.innerHTML = '<pre>' + JSON.stringify(result, null, 2) + '</pre>';
-                resultDiv.classList.add('success');
-                resultDiv.classList.remove('error');
-                resultDiv.classList.add('show');
+                alert('✅ Model trained!\\nAccuracy: ' + (result.accuracy * 100).toFixed(2) + '%');
+                closeTrainingModal();
             } catch (error) {
-                const resultDiv = document.getElementById('mlResult');
-                resultDiv.innerHTML = '<pre>' + error.message + '</pre>';
-                resultDiv.classList.add('error');
-                resultDiv.classList.remove('success');
-                resultDiv.classList.add('show');
-            } finally {
-                document.getElementById('mlLoading').classList.remove('show');
+                alert('Error training model: ' + error.message);
             }
         }
         
-        async function createAgent() {
-            const name = document.getElementById('agentName').value;
-            const goal = document.getElementById('agentGoal').value;
-            
-            if (!name.trim() || !goal.trim()) {
-                alert('Please fill in all fields');
-                return;
+        // Auto-save on message input
+        document.getElementById('messageInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.shiftKey) {
+                sendMessage();
             }
-            
-            document.getElementById('agentLoading').classList.add('show');
-            document.getElementById('agentResult').classList.remove('show');
-            
-            try {
-                const response = await fetch('/api/agent', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name, goal: goal })
-                });
-                const data = await response.json();
-                
-                const resultDiv = document.getElementById('agentResult');
-                resultDiv.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
-                resultDiv.classList.add('success');
-                resultDiv.classList.remove('error');
-                resultDiv.classList.add('show');
-                
-                document.getElementById('agentName').value = '';
-                document.getElementById('agentGoal').value = '';
-                updateStats();
-            } catch (error) {
-                console.error('Error:', error);
-            } finally {
-                document.getElementById('agentLoading').classList.remove('show');
-            }
-        }
+        });
         
-        async function getModelInfo() {
-            document.getElementById('infoLoading').classList.add('show');
-            document.getElementById('infoResult').classList.remove('show');
-            
-            try {
-                const response = await fetch('/api/info');
-                const data = await response.json();
-                
-                const resultDiv = document.getElementById('infoResult');
-                resultDiv.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
-                resultDiv.classList.add('show');
-                
-                updateStats();
-            } catch (error) {
-                console.error('Error:', error);
-            } finally {
-                document.getElementById('infoLoading').classList.remove('show');
-            }
-        }
-        
-        async function updateStats() {
-            try {
-                const response = await fetch('/api/info');
-                const data = await response.json();
-                
-                document.getElementById('agentsCount').textContent = data.agents || 0;
-                document.getElementById('memoryCount').textContent = data.engine?.memoryUsage || 0;
-            } catch (error) {
-                console.error('Error updating stats:', error);
-            }
-        }
-        
-        // Update stats on load
-        window.addEventListener('load', updateStats);
-        // Update stats every 5 seconds
-        setInterval(updateStats, 5000);
+        // Initialize on load
+        window.addEventListener('load', init);
     </script>
 </body>
 </html>
@@ -448,9 +767,8 @@ const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
 
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
@@ -467,70 +785,122 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // API: NLP Processing
-    if (pathname === '/api/nlp' && req.method === 'POST') {
-      let body = '';
-      req.on('data', chunk => body += chunk);
-      req.on('end', async () => {
-        try {
-          const { text } = JSON.parse(body);
-          const result = await ai.think(text);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(result));
-        } catch (error) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: error.message }));
-        }
-      });
-      return;
-    }
-
-    // API: Prediction
-    if (pathname === '/api/predict' && req.method === 'POST') {
-      let body = '';
-      req.on('data', chunk => body += chunk);
-      req.on('end', async () => {
-        try {
-          const { data } = JSON.parse(body);
-          const result = await ai.predict(data);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(result));
-        } catch (error) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: error.message }));
-        }
-      });
-      return;
-    }
-
-    // API: Create Agent
-    if (pathname === '/api/agent' && req.method === 'POST') {
-      let body = '';
-      req.on('data', chunk => body += chunk);
-      req.on('end', async () => {
-        try {
-          const { name, goal } = JSON.parse(body);
-          const agent = ai.createAgent(name, [goal], ['analyze', 'learn', 'report']);
-          const result = await agent.execute({ input: goal });
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(result));
-        } catch (error) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: error.message }));
-        }
-      });
-      return;
-    }
-
-    // API: Model Info
-    if (pathname === '/api/info' && req.method === 'GET') {
-      const info = ai.getModelInfo();
+    // API: Get all chats
+    if (pathname === '/api/chats' && req.method === 'GET') {
+      const chats = getAllChats();
+      const result = {};
+      for (const chat of chats) {
+        result[chat.id] = loadChat(chat.id);
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(info));
+      res.end(JSON.stringify(result));
       return;
     }
 
-    // 404
+    // API: Create new chat
+    if (pathname === '/api/chat' && req.method === 'POST') {
+      const chatId = 'chat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      const chat = {
+        id: chatId,
+        title: 'New Chat',
+        created: new Date().toISOString(),
+        updated: new Date().toISOString(),
+        messages: []
+      };
+      saveChat(chatId, chat);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(chat));
+      return;
+    }
+
+    // API: Delete chat
+    if (pathname.match(/^\/api\/chat\/[\w_]+$/) && req.method === 'DELETE') {
+      const chatId = pathname.split('/').pop();
+      const chatFile = path.join(CHATS_DIR, `${chatId}.json`);
+      if (fs.existsSync(chatFile)) {
+        fs.unlinkSync(chatFile);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      }
+      return;
+    }
+
+    // API: Send message
+    if (pathname === '/api/message' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', async () => {
+        try {
+          const { chatId, message } = JSON.parse(body);
+          const chat = loadChat(chatId);
+
+          // Get AI response
+          const analysis = await ai.think(message);
+          let aiResponse = analysis.sentiment.sentiment === 'positive' 
+            ? 'I understand! That sounds great. ' 
+            : 'I see. ';
+          
+          aiResponse += `Intent: ${analysis.intent}. ${message.substring(0, 50)}...`;
+
+          // Generate code if requested
+          let code = null;
+          if (message.toLowerCase().includes('code') || 
+              message.toLowerCase().includes('function') ||
+              message.toLowerCase().includes('class')) {
+            code = await generateCode(message, chat);
+          }
+
+          // Update chat
+          chat.updated = new Date().toISOString();
+          saveChat(chatId, chat);
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ response: aiResponse, code: code }));
+        } catch (error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Train model
+    if (pathname === '/api/train' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', async () => {
+        try {
+          const { modelName, data } = JSON.parse(body);
+          
+          if (data.length < 2) {
+            throw new Error('Need at least 2 training examples');
+          }
+
+          // Extract labels from last column
+          const labels = data.map(d => d[d.length - 1]);
+          const trainingData = data.map(d => d.slice(0, -1));
+
+          // Train model
+          const result = await ai.learn(trainingData, labels);
+
+          // Save model
+          saveModelData({
+            modelName: modelName,
+            accuracy: result.accuracy,
+            trained: new Date().toISOString(),
+            numExamples: trainingData.length
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error.message }));
+        }
+      });
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
 
@@ -540,16 +910,26 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Auto-open browser
+const { spawn } = require('child_process');
+
 server.listen(PORT, () => {
-  console.log('\n' + '═'.repeat(60));
+  const url = `http://localhost:${PORT}`;
+  console.log('\n' + '═'.repeat(70));
   console.log('🚀 PowerfulAI Server Started!');
-  console.log('═'.repeat(60));
-  console.log(`\n📊 Dashboard: http://localhost:${PORT}`);
-  console.log(`🔗 API: http://localhost:${PORT}/api`);
-  console.log('\nAvailable Endpoints:');
-  console.log('  POST /api/nlp        - Natural Language Processing');
-  console.log('  POST /api/predict    - Machine Learning Prediction');
-  console.log('  POST /api/agent      - Create & Execute Agent');
-  console.log('  GET  /api/info       - Model Information');
-  console.log('\n' + '═'.repeat(60) + '\n');
+  console.log('═'.repeat(70));
+  console.log(`\n📱 Opening: ${url}`);
+  console.log('\n✨ Features:');
+  console.log('   • Claude-like chat interface');
+  console.log('   • AI code generation');
+  console.log('   • Model training');
+  console.log('   • Persistent chat storage');
+  console.log('   • Download chats as JSON');
+  console.log('\n' + '═'.repeat(70) + '\n');
+
+  // Auto-open browser
+  const platform = process.platform;
+  if (platform === 'darwin') spawn('open', [url]);
+  else if (platform === 'win32') spawn('cmd', ['/c', 'start', url]);
+  else spawn('xdg-open', [url]);
 });
